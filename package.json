@@ -1,0 +1,44 @@
+{
+  "name": "v4-trading-desktop",
+  "version": "1.0.5",
+  "private": true,
+  "description": "Local V4-only trading desktop with isolated administrator and trigger wallets",
+  "author": "Local Tools",
+  "main": "src/main.cjs",
+  "dependencies": {
+    "ethers": "6.17.0",
+    "ws": "8.21.0"
+  },
+  "productName": "V4 Trading Desktop",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis --x64 --publish never",
+    "build:contracts": "node scripts/build-contracts.cjs",
+    "test": "node --test test/*.test.cjs",
+    "smoke": "electron . --verify-startup"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.18.0",
+    "solc": "0.8.36"
+  },
+  "build": {
+    "artifactName": "V4-Trading-Desktop-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "renderer/**/*",
+      "artifacts/**/*",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "appId": "local.evm.v4.desktop"
+  },
+  "license": "MIT"
+}
