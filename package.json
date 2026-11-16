@@ -20,7 +20,7 @@
   "devDependencies": {
     "electron": "44.5.1",
     "electron-builder": "26.18.0",
-    "solc": "0.8.36"
+    "solc": "0.8.38"
   },
   "build": {
     "artifactName": "V4-Trading-Desktop-${version}-${arch}.${ext}",

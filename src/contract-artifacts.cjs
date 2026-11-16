@@ -5,7 +5,12 @@ const rebuiltHelper = require("../artifacts/RebuiltV4QuoteHelper.json");
 const historicalHelpers = [require("../artifacts/V4QuoteHelper.json")];
 
 const versions = [
-  { version: "重写版 0.1.0", artifact: rebuiltArtifact, helpers: [rebuiltHelper] },
+  { version: "重写版 0.2.0", artifact: rebuiltArtifact, helpers: [rebuiltHelper], strictTriggerLimits: true },
+  {
+    version: "重写版 0.1.0",
+    artifact: require("../artifacts/Rebuilt010V4SwapExecutor.json"),
+    helpers: [require("../artifacts/Rebuilt010V4QuoteHelper.json")]
+  },
   { version: "1.0.0", artifact: require("../artifacts/V4SwapExecutor.json"), helpers: historicalHelpers }
 ];
 

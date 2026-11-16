@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 import {TradeCore} from "./common/TradeCore.sol";
 import {IWETH, TokenOps} from "./common/TokenOps.sol";
@@ -117,12 +117,10 @@ contract V4SwapExecutor is TradeCore {
     function _executeTrade(
         uint256 amountIn,
         uint256 requestedMinimum,
-        uint256 deadline,
-        uint16 autoSlippageBps,
-        bool automatic
+        uint256 deadline
     ) internal override returns (uint256 bought, uint256 received, uint256 testInputRecovered) {
         V4Types.Route memory route = _bestRoute(amountIn);
-        uint256 minimum = _executionMinimum(route.amountOut, requestedMinimum, autoSlippageBps, automatic);
+        uint256 minimum = _executionMinimum(requestedMinimum);
         bool checkBurn = _settings.checkBurn;
         uint16 probeBps = (_settings.testSell || checkBurn) ? _settings.testSellBps : 0;
         TaxExecutionResult memory result = _settleTrade(route, amountIn, minimum, deadline, probeBps, checkBurn);

@@ -7,6 +7,8 @@ const { Engine: Runner } = require("../src/runner/engine.cjs");
 const oldExecutor = require("../artifacts/V4SwapExecutor.json");
 const oldHelper = require("../artifacts/V4QuoteHelper.json");
 const newHelper = require("../artifacts/RebuiltV4QuoteHelper.json");
+const priorExecutor = require("../artifacts/Rebuilt010V4SwapExecutor.json");
+const priorHelper = require("../artifacts/Rebuilt010V4QuoteHelper.json");
 const target = getAddress("0x" + "11".repeat(20));
 const helper = getAddress("0x" + "22".repeat(20));
 const owner = getAddress("0x" + "33".repeat(20));
@@ -85,21 +87,32 @@ test("runtime verification recognizes exact historical executors and masks immut
     assert.equal(identifyExecutor(deployedCode(artifact)).version, version);
   }
   const rebuilt = identifyExecutor(deployedCode(rebuiltArtifact));
-  assert.equal(rebuilt.version, "重写版 0.1.0");
+  assert.equal(rebuilt.version, "重写版 0.2.0");
   assert.strictEqual(rebuilt.helpers[0], newHelper);
+  const prior = identifyExecutor(deployedCode(priorExecutor));
+  assert.equal(prior.version, "重写版 0.1.0");
+  assert.strictEqual(prior.helpers[0], priorHelper);
   const code = deployedCode(rebuiltArtifact);
   const changed = "0x" + (code.slice(2, 4) === "00" ? "01" : "00") + code.slice(4);
   assert.equal(identifyExecutor(changed), null);
 });
 
-test("contract loading accepts both releases and enforces their quote helpers", async (t) => {
+test("contract loading accepts historical and rebuilt releases and enforces their quote helpers", async (t) => {
   for (const EngineClass of [Engine, Runner]) {
     const engine = makeEngine(EngineClass);
     t.after(() => clearInterval(engine.pollTimer));
     fixture(engine, rebuiltArtifact, newHelper);
     const current = await load(engine);
-    assert.equal(current.verifiedVersion, "重写版 0.1.0");
+    assert.equal(current.verifiedVersion, "重写版 0.2.0");
+    assert.equal(current.strictTriggerLimits, true);
     assert.equal(await current.owner(), owner);
+
+    fixture(engine, priorExecutor, priorHelper);
+    const prior = await load(engine);
+    assert.equal(prior.verifiedVersion, "重写版 0.1.0");
+    assert.equal(prior.strictTriggerLimits, false);
+    fixture(engine, rebuiltArtifact, priorHelper);
+    await assert.rejects(() => load(engine), /报价辅助合约代码|辅助合约代码不符/);
 
     fixture(engine, oldExecutor, oldHelper);
     assert.equal((await load(engine)).verifiedVersion, "1.0.0");
@@ -134,7 +147,37 @@ test("recovery recognizes verified executors despite a mismatched helper and che
   const engine = makeEngine();
   fixture(engine, rebuiltArtifact, oldHelper);
   const contract = await load(engine, { recoveryOnly: true });
-  assert.equal(contract.verifiedVersion, "重写版 0.1.0");
+  assert.equal(contract.verifiedVersion, "重写版 0.2.0");
   fixture(engine, oldExecutor, oldHelper, { executor: { wrappedNative: [ZeroAddress] } });
   await assert.rejects(() => load(engine, { recoveryOnly: true }), /包装币配置不符/);
+});
+
+test("arming requires fixed positive limits only for the new bytecode", async () => {
+  const engine = makeEngine();
+  const calls = [];
+  let strict = true;
+  let minimum = 0n;
+  engine.ownedContract = async () => ({
+    strictTriggerLimits: strict,
+    getSettings: async () => ({ tokenIn: target, minBuyAmount: minimum }),
+    executed: async () => false,
+    armTrigger: { populateTransaction: async (...params) => {
+      calls.push(params);
+      return { to: target, data: "0x" };
+    } }
+  });
+  engine.tokenInfo = async () => ({ decimals: 6, symbol: "INPUT" });
+  engine.provider = { getBlock: async () => ({ timestamp: 1800000000 }) };
+  engine.sendTransaction = async () => ({ status: "pending" });
+  engine.confirmedRead = async (result) => result;
+  await assert.rejects(() => engine.armTrigger({ amountIn: "1" }), /正数的最低实收量/);
+  minimum = 500n;
+  await assert.rejects(() => engine.armTrigger({ amountIn: "0" }), /投入金额大于 0/);
+  assert.deepEqual(calls, []);
+  await engine.armTrigger({ amountIn: "1.25", durationMinutes: 2 });
+  assert.deepEqual(calls[0], [1250000n, 10000, 0, 1800000120]);
+  strict = false;
+  minimum = 0n;
+  await engine.armTrigger({ amountIn: "0", slippagePercent: "2", durationMinutes: 2 });
+  assert.deepEqual(calls[1], [0n, 200, 0, 1800000120]);
 });

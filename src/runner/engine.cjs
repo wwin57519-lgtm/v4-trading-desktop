@@ -120,14 +120,21 @@ class Engine{
   const code=await pool.read('getCode',target),matched=CONTRACTS.identifyExecutor(code,this.artifact);
   if(!matched)throw Error('该地址的运行时代码与支持的执行合约不匹配');
   const contract=new Contract(target,matched.artifact.abi,pool.primary);
-  Object.defineProperty(contract,'verifiedVersion',{value:matched.version});
+  Object.defineProperties(contract,{
+   verifiedVersion:{value:matched.version},
+   strictTriggerLimits:{value:matched.strictTriggerLimits===true}
+  });
   await DEX.validateDependencies(contract,pool.primary,matched.helpers,{},this.chain);
   return contract;
  }
- async inspect(raw){const generation=this.startGeneration,pool=this.pool;const c=await this.contractAt(raw);const [owner,executed,armed,epoch,policy,s,block]=await Promise.all([c.owner(),c.executed(),c.triggerArmed(),c.triggerEpoch(),c.getTriggerPolicy(),c.getSettings(),this.pool.read('getBlock','latest')]);const contract={address:await c.getAddress(),owner,executed,triggerArmed:armed,triggerEpoch:String(epoch),policy:{amountIn:String(policy.amountIn),slippageBps:Number(policy.slippageBps),notBefore:Number(policy.notBefore),expiresAt:Number(policy.expiresAt)},settings:{tokenIn:s.tokenIn,tokenOut:s.tokenOut,recipient:s.recipient,priceMode:Number(s.priceMode),minBuyAmount:String(s.minBuyAmount)},supported:true,version:'执行器 '+(c.verifiedVersion||'0.5.0'),...await DEX.policy(c),blockTimestamp:block.timestamp,blockObservedAt:Date.now()};if(this.closed||generation!==this.startGeneration||pool!==this.pool)throw Error('合约读取上下文变化');this.contract=contract;this.config={...this.config,contractAddress:this.contract.address,v4Pools:this.contract.v4Pools||[],lockedPoolId:this.contract.lockedPoolId||require('ethers').ZeroHash};return this.contract;}
+ async inspect(raw){const generation=this.startGeneration,pool=this.pool;const c=await this.contractAt(raw);const [owner,executed,armed,epoch,policy,s,block]=await Promise.all([c.owner(),c.executed(),c.triggerArmed(),c.triggerEpoch(),c.getTriggerPolicy(),c.getSettings(),this.pool.read('getBlock','latest')]);const contract={address:await c.getAddress(),owner,executed,triggerArmed:armed,triggerEpoch:String(epoch),policy:{amountIn:String(policy.amountIn),slippageBps:Number(policy.slippageBps),notBefore:Number(policy.notBefore),expiresAt:Number(policy.expiresAt)},settings:{tokenIn:s.tokenIn,tokenOut:s.tokenOut,recipient:s.recipient,priceMode:Number(s.priceMode),minBuyAmount:String(s.minBuyAmount)},supported:true,strictTriggerLimits:c.strictTriggerLimits,version:'执行器 '+(c.verifiedVersion||'0.5.0'),...await DEX.policy(c),blockTimestamp:block.timestamp,blockObservedAt:Date.now()};if(this.closed||generation!==this.startGeneration||pool!==this.pool)throw Error('合约读取上下文变化');this.contract=contract;this.config={...this.config,contractAddress:this.contract.address,v4Pools:this.contract.v4Pools||[],lockedPoolId:this.contract.lockedPoolId||require('ethers').ZeroHash};return this.contract;}
  async refreshWallets(){if(!this.pool)return;const c=this.contract?new Contract(this.contract.address,this.artifact.abi,this.pool.primary):null;await mapLimit(this.vault.list(),4,async w=>{try{const [balance,authorized]=await Promise.all([this.pool.read('getBalance',w.address),c?c.isTriggerWallet(w.address):null]);this.walletCache.set(w.address.toLowerCase(),{balance:formatUnits(balance,18),authorized});}catch(e){this.walletCache.set(w.address.toLowerCase(),{error:cleanError(e)});}});this.emit({type:'wallets',wallets:this.publicWallets()});}
  async prepare(raw){const config=normalize(raw,this.chain);if(!this.pool||JSON.stringify(this.pool.urls)!==JSON.stringify(config.rpcUrls)||this.pool.rps!==config.rpcRps)await this.connect(config.rpcUrls,config.rpcRps);const contract=await this.inspect(config.contractAddress);
   if(config.mode==='listen'&&config.listenLiquidity){config.liquidityDex=contract.dex===2?'PancakeSwap':'Uniswap';config.liquidityToken=config.liquidityToken||contract.settings.tokenOut;config.liquidityTargets=[];}
+  if(contract.strictTriggerLimits&&(BigInt(contract.policy.amountIn)<=0n||
+     BigInt(contract.settings.minBuyAmount)<=0n||contract.policy.slippageBps!==10000)){
+    throw Error('新版合约须由管理员设置正数投入金额和固定最低实收后开启本轮');
+   }
   // Never trust candidate keys supplied by renderer/local configuration.
   config.v4Pools=contract.v4Pools||[];config.lockedPoolId=contract.lockedPoolId||require('ethers').ZeroHash;
   if(config.mode==='listen'&&config.listenLiquidity&&config.v4Pools.length){const v=this.chain.v4,inf=v.infinity;config.liquidityTargets.push(...[v.positionManager,...(inf?[inf.clPositionManager,inf.binPositionManager]:[])]);}

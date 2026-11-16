@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 /// @dev Fixed dependency order retained from the desktop V4 workbench.
 library V4NetworkConfig {

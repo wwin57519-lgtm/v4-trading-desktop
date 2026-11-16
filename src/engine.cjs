@@ -152,7 +152,10 @@ class Engine {
     const matched=CONTRACTS.identifyExecutor(code,this.artifact);
     if(!matched)throw Error('该地址的运行时代码与支持的执行合约不匹配');
     const c=new Contract(a,matched.artifact.abi,p);
-    Object.defineProperty(c,'verifiedVersion',{value:matched.version});
+    Object.defineProperties(c,{
+      verifiedVersion:{value:matched.version},
+      strictTriggerLimits:{value:matched.strictTriggerLimits===true}
+    });
     if(recoveryOnly){
       if(!c.interface.hasFunction('networkChainId')&&this.chain.chainId!==8453)throw Error('旧执行合约仅支持 Base 提款');
       if(c.interface.hasFunction('networkChainId')&&Number(await c.networkChainId())!==this.chain.chainId)throw Error('提款执行器链标识不符');
@@ -208,7 +211,7 @@ class Engine {
     // shutdown must not redirect the next deposit/withdrawal to a partial load.
     if(this.closed||generation!==this.contextGeneration)throw Error('合约读取上下文已变化，丢弃旧结果');
     this.commitContractContext(a,{settings,isOwner});
-    return this.loadedContract={address:a,contractVersion:c.verifiedVersion,owner,isOwner,executed,settings,settingsReadable:!!settings,rawSettings,balanceIn,funds,metadataWarnings,trigger,...dexPolicy};
+    return this.loadedContract={address:a,contractVersion:c.verifiedVersion,strictTriggerLimits:c.strictTriggerLimits,owner,isOwner,executed,settings,settingsReadable:!!settings,rawSettings,balanceIn,funds,metadataWarnings,trigger,...dexPolicy};
   }
   humanSettings(s,di,do_){return {tokenIn:s.tokenIn,tokenOut:s.tokenOut,recipient:s.recipient,minBuyAmount:formatUnits(s.minBuyAmount,do_),priceProtectionMode:Number(s.priceMode)===1?'minimum':'slippage',allowV2:false,checkBurn:s.checkBurn,maxBurnPercent:formatUnits(s.maxBurnBps,2),testSell:s.testSell,testSellPercent:formatUnits(s.testSellBps,2)};}
   async ownedContract({recoveryOnly=false}={}){if(this.recoveryOnly&&!recoveryOnly)throw Error('当前仅加载用于提款；请完整加载合约后再进行交易或设置操作');if(!this.contractAddress)throw Error('请先加载或部署专属合约');const c=await this.validateContract(this.contractAddress,{recoveryOnly});if(!this.wallet||getAddress(await c.owner())!==this.wallet.address)throw Error('当前钱包不是该合约的所有者');return c;}
@@ -324,7 +327,7 @@ class Engine {
     const wallets=[];
     for(let offset=0;offset<addresses.length;offset+=10){const chunk=addresses.slice(offset,offset+10);const flags=await Promise.all(chunk.map(a=>c.isTriggerWallet(a)));wallets.push(...chunk.map((a,i)=>({address:a,allowed:flags[i]})));}
     const hasMinimum=s.minBuyAmount>0n,hasQuote=policy.slippageBps<10000n;
-    return {armed,epoch:String(epoch),executed,amountIn:decimals===null?null:formatUnits(policy.amountIn,decimals),amountInRaw:String(policy.amountIn),decimals,slippagePercent:formatUnits(policy.slippageBps,2),priceProtectionMode:hasMinimum?(hasQuote?'combined':'minimum'):(hasQuote?'slippage':'none'),notBefore:Number(policy.notBefore),expiresAt:Number(policy.expiresAt),blockTimestamp:block.timestamp,wallets};
+    return {armed,epoch:String(epoch),executed,strictTriggerLimits:c.strictTriggerLimits,minimumReceivedRaw:String(s.minBuyAmount),amountIn:decimals===null?null:formatUnits(policy.amountIn,decimals),amountInRaw:String(policy.amountIn),decimals,slippagePercent:formatUnits(policy.slippageBps,2),priceProtectionMode:hasMinimum?(hasQuote?'combined':'minimum'):(hasQuote?'slippage':'none'),notBefore:Number(policy.notBefore),expiresAt:Number(policy.expiresAt),blockTimestamp:block.timestamp,wallets};
   }
   async setTriggerWallets({addresses,allowed}) {
     if(typeof allowed!=='boolean')throw Error('请选择授权或撤销授权');
@@ -341,12 +344,16 @@ class Engine {
     const c=await this.ownedContract(),s=await c.getSettings();
     if(s.tokenIn===ZeroAddress)throw Error('请先保存链上设置');
     if(await c.executed())throw Error(ERROR_TEXT.AlreadyExecuted);
+    if(c.strictTriggerLimits&&BigInt(s.minBuyAmount)===0n)throw Error('请选择固定最小得到模式，并保存正数的最低实收量');
     const priceMode=PRICE.executionMode(args.priceProtectionMode,s.minBuyAmount);
-    const info=await this.tokenInfo(s.tokenIn),n=amount(args.amountIn,info.decimals,'触发购买金额'),bps=priceMode==='minimum'?10000:PRICE.quoteBps(percentage(args.slippagePercent??1,'触发滑点'));
+    const info=await this.tokenInfo(s.tokenIn),n=amount(args.amountIn,info.decimals,'触发购买金额');
+    if(c.strictTriggerLimits&&n<=0n)throw Error('新版执行器要求本轮投入金额大于 0');
+    const bps=priceMode==='minimum'?10000:PRICE.quoteBps(percentage(args.slippagePercent??1,'触发滑点'));
     const minutes=args.durationMinutes===undefined?15:Number(args.durationMinutes);
     if(!Number.isInteger(minutes)||minutes<1||minutes>1440)throw Error('自动到期时长必须为 1–1440 分钟的整数');
     const block=await this.provider.getBlock('latest'),start=0,end=Number(block.timestamp)+minutes*60;
-    const r=await this.sendTransaction(await c.armTrigger.populateTransaction(n,bps,start,end),`开启本轮自动任务：支付 ${n===0n?'合约全部余额':formatUnits(n,info.decimals)} ${info.symbol}，${priceMode==='minimum'?'仅最小得到，滑点下限关闭':'仅自动滑点 '+formatUnits(bps,2)+'%，固定最低数量关闭'}，链上截止 ${new Date(end*1000).toLocaleString()}；从准备时的链上时间计时，确认等待会占用有效期`,{expiresAt:end});
+    const protection=c.strictTriggerLimits?'最低实收 '+s.minBuyAmount+' 获得币最小单位':priceMode==='minimum'?'仅最小得到，滑点下限关闭':'仅自动滑点 '+formatUnits(bps,2)+'%，固定最低数量关闭';
+    const r=await this.sendTransaction(await c.armTrigger.populateTransaction(n,bps,start,end),`开启本轮自动任务：支付 ${n===0n?'合约全部余额':formatUnits(n,info.decimals)} ${info.symbol}，${protection}，链上截止 ${new Date(end*1000).toLocaleString()}；从准备时的链上时间计时，确认等待会占用有效期`,{expiresAt:end});
     return this.confirmedRead(r,async()=>({trigger:await this.readTrigger(undefined,c)}));
   }
   async disarmTrigger() {

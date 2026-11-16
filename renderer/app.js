@@ -346,6 +346,9 @@
     badge($('auto-route-badge'),state.v4Pools.length?'V4 · '+state.v4Pools.length+' 个候选':'尚无候选','blue');
     const savedRoute = state.contract?.settings || null;
     text($('auto-task-route-summary'), savedRoute ? `合约在触发时按链上已保存设置执行：${routeMode(savedRoute)}。无需展开报价预览；设置本轮金额与有效期、开启本轮后，运行 Trigger 即可。` : '先保存交易设置，再设置本轮金额与有效期、开启本轮并运行 Trigger；合约会在触发时自动选池，无需手动报价。');
+    const strictTrigger = state.contract?.strictTriggerLimits === true;
+    show($('trigger-advanced-details'), !strictTrigger);
+    text($('trigger-amount-help'), strictTrigger ? '填写大于 0 的投入金额。交易设置中保存的固定最小得到量是本轮实际到账下限。' : '本轮花多少支付代币。历史合约以 0 表示使用全部支付币余额。');
     const fullSell = ($('test-sell').checked || $('check-burn').checked) && Number($('test-sell-percent').value) === 100;
     text($('test-sell-help'), (fullSell ? '试卖 100% 会真实卖光本次买入量，卖出所得支付代币回到执行合约，收款人不会收到剩余获得代币。' : '按全额买入后，再卖出买到数量的指定比例。试卖 1% 并非只用本金 1% 先试买；成功仅证明本次路径与试卖量可卖出。') + ' 试卖量不足一个代币最小单位时，整笔交易回滚，不会自动扩大试卖比例。最多两位小数；0.1 表示 0.1%，不是 10%。');
     $('test-sell-help').classList.toggle('emphasis', fullSell);
@@ -527,10 +530,14 @@
     const hasMinimum=/[1-9]/.test(String(state.contract?.settings?.minBuyAmount??state.contract?.rawSettings?.minBuyAmountRaw??'0'));
     const mode=policy.priceProtectionMode||(hasMinimum?(Number(policy.slippagePercent)<100?'combined':'minimum'):(Number(policy.slippagePercent)<100?'slippage':'none'));
     text($('trigger-policy-summary'),`${policy.amountInRaw==='0'?'全部支付代币余额':policy.amountIn==null?`${policy.amountInRaw} 最小单位（精度未读取）`:policy.amountIn+' 支付代币'} / ${mode==='minimum'?'仅最小得到（滑点关闭）':mode==='slippage'?'仅滑点 '+policy.slippagePercent+'%':mode==='combined'?'旧任务：最小得到 + 滑点 '+policy.slippagePercent+'%':'两项价格保护均关闭（旧参数）'}`);
+    if(policy.strictTriggerLimits){
+      const amountLabel=policy.amountInRaw==='0'?'尚未设定':(policy.amountIn??policy.amountInRaw+' 最小单位')+' 支付代币';
+      text($('trigger-policy-summary'),amountLabel+' · 最低实收 '+policy.minimumReceivedRaw+' 获得币最小单位');
+    }
     show($('price-policy-warning'),policy.armed&&(mode==='combined'||mode==='none'));
     text($('price-policy-warning'),'链上旧任务仍使用原参数。请结束本轮；选择一种价格保护并保存设置后，再重新开启。切换界面不会自动修改正在运行的任务。');
     text($('trigger-window'),policy.expiresAt?`${policy.notBefore?new Date(policy.notBefore*1000).toLocaleString():'立即'} → ${new Date(policy.expiresAt*1000).toLocaleString()}`:'尚未配置有效期');
-    if(applyForm){const hasPriorPolicy=Number(policy.expiresAt)>0;$('trigger-amount').value=hasPriorPolicy?(policy.amountIn==null?'':policy.amountIn):'0';if(hasPriorPolicy&&Number(policy.slippagePercent)<100)$('trigger-slippage').value=policy.slippagePercent;}
+    if(applyForm){const hasPriorPolicy=Number(policy.expiresAt)>0;$('trigger-amount').value=hasPriorPolicy?(policy.amountIn==null?'':policy.amountIn):(policy.strictTriggerLimits?'':'0');if(hasPriorPolicy&&Number(policy.slippagePercent)<100)$('trigger-slippage').value=policy.slippagePercent;}
     const wallets=policy.wallets||[],summary=document.createElement('div');summary.className='field-help';text(summary,`本次读取 ${wallets.length} 个公开地址，已授权 ${wallets.filter(item=>item.allowed).length} 个。链上白名单不能自动枚举，查询列表来自本机记录或本次输入。`);list.append(summary);
     wallets.forEach(item=>{const row=document.createElement('div');row.className='trigger-wallet-row';const a=document.createElement('span');a.className='mono';text(a,item.address);const flag=document.createElement('span');badge(flag,item.allowed?'已授权':'未授权',item.allowed?'success':'neutral');row.append(a,flag);list.append(row);});
     renderTriggerClock();
@@ -746,7 +753,9 @@
     const rawDuration=$('trigger-duration').value.trim(),durationMinutes=Number(rawDuration);
     if(!/^\d+$/.test(rawDuration)||!Number.isSafeInteger(durationMinutes)||durationMinutes<1||durationMinutes>1440)throw Error('有效期请输入 1–1440 之间的整分钟数。');
     validSettings();
-    return {amountIn:decimal($('trigger-amount').value,'本轮自动支付数量',true),priceProtectionMode:state.priceProtectionMode,slippagePercent:state.priceProtectionMode==='minimum'?'100':quotePercent($('trigger-slippage').value,'自动滑点'),durationMinutes};
+    const strict = state.contract?.strictTriggerLimits === true;
+    if(strict&&state.priceProtectionMode!=='minimum')throw Error('请先保存固定的最低实收量');
+    return {amountIn:decimal($('trigger-amount').value,'本轮自动支付数量',!strict),priceProtectionMode:state.priceProtectionMode,slippagePercent:state.priceProtectionMode==='minimum'?'100':quotePercent($('trigger-slippage').value,'自动滑点'),durationMinutes};
   },async result=>{if(transactionReturned(result,'开启本轮')){state.triggerEnd=null;await readAfterTransaction();}}));
   on('trigger-disarm',()=>operate('trigger-disarm','trigger.disarm',()=>{
     state.triggerEnd = {contractAddress:state.contract.address.toLowerCase(),epoch:state.contract.trigger?.epoch||'0',hash:null,status:'awaitingWallet',priorRecords:new Set(state.transactions.map(record=>record.hash||record.requestId||`${record.createdAt}|${record.nonce}|${record.data}`))};

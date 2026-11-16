@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 import {V4Types, IUniV4Quoter, IInfinityQuoter} from "./v4/V4Types.sol";
 import {V4NetworkConfig} from "./v4/V4NetworkConfig.sol";

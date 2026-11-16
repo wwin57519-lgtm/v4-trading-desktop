@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.38;
 
 import {IWETH, TokenOps} from "./TokenOps.sol";
 
@@ -170,8 +170,10 @@ abstract contract TradeCore {
     {
         if (_settingsInput() == address(0)) revert NotConfigured();
         if (executed) revert AlreadyExecuted();
-        bool validPricePolicy = _settingsMinimum() == 0 ? slippageBps < BPS : slippageBps == BPS;
-        if (!validPricePolicy || expiresAt <= block.timestamp || notBefore >= expiresAt) {
+        // Keep the existing ABI's fixed-price mode marker. The owner sets the
+        // absolute recipient floor in settings before arming a specific amount.
+        if (amountIn == 0 || _settingsMinimum() == 0 || slippageBps != BPS
+            || expiresAt <= block.timestamp || notBefore >= expiresAt) {
             revert InvalidTriggerPolicy();
         }
         ++triggerEpoch;
@@ -197,7 +199,7 @@ abstract contract TradeCore {
         _checkRound(expectedEpoch);
         if (block.timestamp > deadline) revert Expired();
         _beginTrade(amountIn);
-        return _executeTrade(amountIn, minOut, deadline, 0, false);
+        return _executeTrade(amountIn, minOut, deadline);
     }
 
     function trigger(uint256 expectedEpoch)
@@ -211,12 +213,10 @@ abstract contract TradeCore {
         TriggerPolicy memory policy = _triggerPolicy;
         if (block.timestamp < policy.notBefore) revert TriggerTooEarly();
         if (block.timestamp > policy.expiresAt) revert Expired();
-        uint256 amountIn = policy.amountIn;
-        if (amountIn == 0) amountIn = TokenOps.balanceOf(_settingsInput(), address(this));
-
-        _beginTrade(amountIn);
-        (bought, received, testInputRecovered) =
-            _executeTrade(amountIn, 0, policy.expiresAt, policy.slippageBps, true);
+        uint256 minimumReceived = _settingsMinimum();
+        _beginTrade(policy.amountIn);
+        (bought, received, testInputRecovered) = _executeTrade(policy.amountIn, 0, policy.expiresAt);
+        if (received < minimumReceived) revert MinimumNotMet(received, minimumReceived);
         emit TriggerExecuted(msg.sender, expectedEpoch);
     }
 
@@ -235,19 +235,13 @@ abstract contract TradeCore {
         emit TriggerDisarmed(triggerEpoch);
     }
 
-    function _executionMinimum(uint256 quote, uint256 requestedMinimum, uint16 autoSlippageBps, bool automatic)
-        internal
-        view
-        returns (uint256)
-    {
+    function _executionMinimum(uint256 requestedMinimum) internal view returns (uint256) {
         uint256 fixedMinimum = _settingsMinimum();
         if (fixedMinimum != 0) {
             if (requestedMinimum != 0) revert InvalidPriceProtection();
             return fixedMinimum;
         }
-        uint256 minimum = automatic ? _lossFloor(quote, autoSlippageBps) : requestedMinimum;
-        // A positive quote below one unit after integer rounding still requires output.
-        return minimum == 0 ? 1 : minimum;
+        return requestedMinimum == 0 ? 1 : requestedMinimum;
     }
 
     function _lossFloor(uint256 expected, uint16 lossBps) internal pure returns (uint256) {
@@ -297,7 +291,7 @@ abstract contract TradeCore {
 
     function _settingsInput() internal view virtual returns (address);
     function _settingsMinimum() internal view virtual returns (uint256);
-    function _executeTrade(uint256 amountIn, uint256 requestedMinimum, uint256 deadline, uint16 autoSlippageBps, bool automatic)
+    function _executeTrade(uint256 amountIn, uint256 requestedMinimum, uint256 deadline)
         internal
         virtual
         returns (uint256 bought, uint256 received, uint256 testInputRecovered);
